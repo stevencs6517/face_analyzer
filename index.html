@@ -1,34 +1,99 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Aesthetics Engine</title>
+    <title>Aesthetics Engine Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js"></script>
     <style>
-        body { font-family: sans-serif; background: #121212; color: #ffffff; padding: 20px; }
-        #webcam { border-radius: 8px; border: 2px solid #333; max-width: 100%; }
-        #results { font-size: 20px; font-weight: bold; margin-top: 20px; line-height: 1.6; }
-        .metric { background: #2a2a2a; padding: 10px 15px; margin-bottom: 10px; border-radius: 6px; }
+        body { font-family: monospace; background: #0a0a0a; color: #ededed; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        #webcam { border-radius: 8px; border: 1px solid #333; max-width: 100%; width: 640px; }
+        #controls { margin-top: 20px; }
+        button { background: #fff; color: #000; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 4px; text-transform: uppercase; transition: background 0.2s; }
+        button:hover:not(:disabled) { background: #ccc; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        #status { margin-top: 15px; font-size: 18px; color: #facc15; height: 24px; font-weight: bold; }
+        #results { width: 640px; margin-top: 20px; display: none; background: #111; padding: 20px; border-radius: 8px; border: 1px solid #333; }
+        .metric { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid #222; font-size: 16px; }
+        .metric:last-child { border-bottom: none; }
+        .metric-info { flex: 1; }
+        .metric-data { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+        .value { font-weight: bold; font-size: 18px; margin-bottom: 4px; }
+        .ideal { color: #666; font-size: 12px; display: block; margin-top: 4px; }
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
     </style>
 </head>
 <body>
+
     <video id="webcam" autoplay playsinline></video>
-    <div id="results">Loading Engine...</div>
+    
+    <div id="controls">
+        <button id="captureBtn" disabled>Loading Engine...</button>
+    </div>
+    
+    <div id="status"></div>
+    <div id="results"></div>
 
     <script type="module">
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
 
         const video = document.getElementById('webcam');
+        const captureBtn = document.getElementById('captureBtn');
+        const statusDiv = document.getElementById('status');
         const resultsDiv = document.getElementById('results');
 
-        // Math helper for Euclidean distance
+        let faceLandmarker;
+        let isAnalyzing = false;
+
         function calculateDistance(pt1, pt2) {
             return Math.sqrt(Math.pow(pt2.x - pt1.x, 2) + Math.pow(pt2.y - pt1.y, 2));
         }
 
+        // --- THE CLINICAL GRADING ENGINE ---
+        
+        function gradeLowerThird(ratio) {
+            if (ratio >= 2.15 && ratio <= 2.35) {
+                return { category: "Ideal", color: "#000", bg: "#4ade80" }; // Green
+            } else if (ratio >= 1.9 && ratio < 2.5) {
+                return { category: "Average", color: "#000", bg: "#fbbf24" }; // Yellow
+            } else {
+                return { category: "Sub-Optimal", color: "#fff", bg: "#ef4444" }; // Red
+            }
+        }
+
+        function gradeCanthalTilt(tiltDegrees) {
+            if (tiltDegrees >= 3 && tiltDegrees <= 8) {
+                return { category: "Ideal", color: "#000", bg: "#4ade80" };
+            } else if (tiltDegrees >= -1 && tiltDegrees < 3) {
+                return { category: "Average", color: "#000", bg: "#fbbf24" };
+            } else {
+                return { category: "Sub-Optimal", color: "#fff", bg: "#ef4444" };
+            }
+        }
+
+        function gradeFWHR(ratio) {
+            if (ratio >= 1.85 && ratio <= 1.95) {
+                return { category: "Ideal", color: "#000", bg: "#4ade80" };
+            } else if (ratio >= 1.70 && ratio < 1.85) {
+                return { category: "Average", color: "#000", bg: "#fbbf24" };
+            } else {
+                return { category: "Sub-Optimal", color: "#fff", bg: "#ef4444" };
+            }
+        }
+
+        function gradeMidface(ratio) {
+            if (ratio >= 0.95 && ratio <= 1.05) {
+                return { category: "Ideal", color: "#000", bg: "#4ade80" };
+            } else if (ratio >= 0.85 && ratio < 0.95) {
+                 return { category: "Average", color: "#000", bg: "#fbbf24" };
+            } else {
+                 return { category: "Sub-Optimal", color: "#fff", bg: "#ef4444" };
+            }
+        }
+
+        // --- INITIALIZATION ---
+
         async function initializeApp() {
-            // 1. Load the ML Model
             const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
-            const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
                     delegate: "GPU"
@@ -37,64 +102,153 @@
                 numFaces: 1
             });
 
-            // 2. Start the Webcam
             navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
                 video.srcObject = stream;
-                video.addEventListener("loadeddata", () => predictWebcam(faceLandmarker));
+                video.addEventListener("loadeddata", () => {
+                    captureBtn.innerText = "Run Analysis";
+                    captureBtn.disabled = false;
+                    predictWebcam();
+                });
             });
         }
 
-        let lastVideoTime = -1;
+        let currentLandmarks = null;
 
-        // 3. The Core Loop
-        async function predictWebcam(faceLandmarker) {
+        async function predictWebcam() {
             let startTimeMs = performance.now();
+            const results = faceLandmarker.detectForVideo(video, startTimeMs);
             
-            if (lastVideoTime !== video.currentTime) {
-                lastVideoTime = video.currentTime;
-                
-                // Detect the face
-                const results = faceLandmarker.detectForVideo(video, startTimeMs);
-
-                if (results.faceLandmarks.length > 0) {
-                    const landmarks = results.faceLandmarks[0];
-
-                    // --- CHIN-TO-PHILTRUM RATIO ---
-                    const noseBase = landmarks[2];
-                    const upperLip = landmarks[0];
-                    const lowerLip = landmarks[17];
-                    const chinBase = landmarks[152];
-
-                    const philtrumLength = calculateDistance(noseBase, upperLip);
-                    const chinLength = calculateDistance(lowerLip, chinBase);
-                    const ratio = chinLength / philtrumLength;
-
-                    // --- CANTHAL TILT (LEFT EYE) ---
-                    const leftInner = landmarks[133];
-                    const leftOuter = landmarks[33];
-                    const leftDeltaX = Math.abs(leftOuter.x - leftInner.x);
-                    const leftDeltaY = leftInner.y - leftOuter.y; // Inverted Y-axis logic
-                    const leftTilt = Math.atan2(leftDeltaY, leftDeltaX) * (180 / Math.PI);
-
-                    // --- CANTHAL TILT (RIGHT EYE) ---
-                    const rightInner = landmarks[362];
-                    const rightOuter = landmarks[263];
-                    const rightDeltaX = Math.abs(rightOuter.x - rightInner.x);
-                    const rightDeltaY = rightInner.y - rightOuter.y; // Inverted Y-axis logic
-                    const rightTilt = Math.atan2(rightDeltaY, rightDeltaX) * (180 / Math.PI);
-
-                    // --- DISPLAY RESULTS ---
-                    resultsDiv.innerHTML = `
-                        <div class="metric">Chin-to-Philtrum Ratio: <span style="color: #4ade80">${ratio.toFixed(2)} : 1</span></div>
-                        <div class="metric">Left Eye Tilt: <span style="color: #60a5fa">${leftTilt.toFixed(2)}&deg;</span></div>
-                        <div class="metric">Right Eye Tilt: <span style="color: #60a5fa">${rightTilt.toFixed(2)}&deg;</span></div>
-                    `;
-                } else {
-                    resultsDiv.innerHTML = "No face detected. Please ensure you are in frame.";
-                }
+            if (results.faceLandmarks.length > 0) {
+                currentLandmarks = results.faceLandmarks[0];
+            } else {
+                currentLandmarks = null;
             }
-            // Loop frame by frame
-            window.requestAnimationFrame(() => predictWebcam(faceLandmarker));
+            window.requestAnimationFrame(predictWebcam);
+        }
+
+        // --- THE ANALYSIS SEQUENCE ---
+        captureBtn.addEventListener('click', () => {
+            if (!currentLandmarks) {
+                statusDiv.innerText = "Error: No face detected. Look at the camera.";
+                return;
+            }
+            if (isAnalyzing) return;
+
+            isAnalyzing = true;
+            captureBtn.disabled = true;
+            resultsDiv.style.display = "none";
+            
+            // Freeze the video frame for effect
+            video.pause();
+
+            let secondsLeft = 20;
+            statusDiv.innerText = `Extracting geometric mesh... (${secondsLeft}s)`;
+
+            const countdown = setInterval(() => {
+                secondsLeft--;
+                if (secondsLeft > 15) {
+                    statusDiv.innerText = `Calculating bizygomatic width... (${secondsLeft}s)`;
+                } else if (secondsLeft > 10) {
+                    statusDiv.innerText = `Mapping interpupillary distance... (${secondsLeft}s)`;
+                } else if (secondsLeft > 5) {
+                    statusDiv.innerText = `Evaluating lower third proportions... (${secondsLeft}s)`;
+                } else if (secondsLeft > 0) {
+                    statusDiv.innerText = `Finalizing structural report... (${secondsLeft}s)`;
+                } else {
+                    clearInterval(countdown);
+                    statusDiv.innerText = "CLINICAL REPORT GENERATED.";
+                    statusDiv.style.color = "#fff";
+                    generateReport(currentLandmarks);
+                    isAnalyzing = false;
+                    captureBtn.disabled = false;
+                    captureBtn.innerText = "Run New Analysis";
+                    video.play(); // Unfreeze
+                }
+            }, 1000);
+        });
+
+        // --- REPORT GENERATION ---
+        function generateReport(landmarks) {
+            // 1. Chin-to-Philtrum
+            const noseBase = landmarks[2];
+            const upperLip = landmarks[0];
+            const lowerLip = landmarks[17];
+            const chinBase = landmarks[152];
+            const philtrumLength = calculateDistance(noseBase, upperLip);
+            const chinLength = calculateDistance(lowerLip, chinBase);
+            const lowerThirdRatio = chinLength / philtrumLength;
+            const lowerThirdGrade = gradeLowerThird(lowerThirdRatio);
+
+            // 2. Canthal Tilt (Averaged)
+            const leftInner = landmarks[133], leftOuter = landmarks[33];
+            const rightInner = landmarks[362], rightOuter = landmarks[263];
+            const leftTilt = Math.atan2(leftInner.y - leftOuter.y, Math.abs(leftOuter.x - leftInner.x)) * (180 / Math.PI);
+            const rightTilt = Math.atan2(rightInner.y - rightOuter.y, Math.abs(rightOuter.x - rightInner.x)) * (180 / Math.PI);
+            const avgTilt = (leftTilt + rightTilt) / 2;
+            const tiltGrade = gradeCanthalTilt(avgTilt);
+
+            // 3. FWHR (Facial Width to Height Ratio)
+            const leftZygomatic = landmarks[234];
+            const rightZygomatic = landmarks[454];
+            const brow = landmarks[10];
+            const facialWidth = calculateDistance(leftZygomatic, rightZygomatic);
+            const facialHeight = calculateDistance(brow, upperLip);
+            const fwhr = facialWidth / facialHeight;
+            const fwhrGrade = gradeFWHR(fwhr);
+
+            // 4. Midface Ratio
+            const leftPupil = landmarks[468];
+            const rightPupil = landmarks[473];
+            const nasion = landmarks[8];
+            const ipd = calculateDistance(leftPupil, rightPupil);
+            const midfaceHeight = calculateDistance(nasion, upperLip);
+            const midfaceRatio = ipd / midfaceHeight;
+            const midfaceGrade = gradeMidface(midfaceRatio);
+
+            // Render Results
+            resultsDiv.innerHTML = `
+                <div class="metric">
+                    <div class="metric-info">
+                        <strong>Chin-to-Philtrum Ratio</strong>
+                        <span class="ideal">Target: ~2.25 : 1</span>
+                    </div>
+                    <div class="metric-data">
+                        <span class="value" style="color: ${lowerThirdGrade.bg}">${lowerThirdRatio.toFixed(2)} : 1</span>
+                        <span class="status-badge" style="background: ${lowerThirdGrade.bg}; color: ${lowerThirdGrade.color}">${lowerThirdGrade.category}</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-info">
+                        <strong>Canthal Tilt (Average)</strong>
+                        <span class="ideal">Target: Positive (+3&deg; to +8&deg;)</span>
+                    </div>
+                    <div class="metric-data">
+                        <span class="value" style="color: ${tiltGrade.bg}">${avgTilt > 0 ? '+' : ''}${avgTilt.toFixed(2)}&deg;</span>
+                        <span class="status-badge" style="background: ${tiltGrade.bg}; color: ${tiltGrade.color}">${tiltGrade.category}</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-info">
+                        <strong>FWHR (Width-to-Height)</strong>
+                        <span class="ideal">Target: ~1.85 - 1.95</span>
+                    </div>
+                    <div class="metric-data">
+                        <span class="value" style="color: ${fwhrGrade.bg}">${fwhr.toFixed(2)}</span>
+                        <span class="status-badge" style="background: ${fwhrGrade.bg}; color: ${fwhrGrade.color}">${fwhrGrade.category}</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-info">
+                        <strong>Midface Ratio (IPD/Height)</strong>
+                        <span class="ideal">Target: ~0.95 - 1.05</span>
+                    </div>
+                    <div class="metric-data">
+                        <span class="value" style="color: ${midfaceGrade.bg}">${midfaceRatio.toFixed(2)}</span>
+                        <span class="status-badge" style="background: ${midfaceGrade.bg}; color: ${midfaceGrade.color}">${midfaceGrade.category}</span>
+                    </div>
+                </div>
+            `;
+            resultsDiv.style.display = "block";
         }
 
         initializeApp();
