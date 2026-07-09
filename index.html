@@ -2,12 +2,17 @@
 <html>
 <head>
     <title>Aesthetics Engine</title>
-    <!-- Load MediaPipe via CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: #ffffff; padding: 20px; }
+        #webcam { border-radius: 8px; border: 2px solid #333; max-width: 100%; }
+        #results { font-size: 20px; font-weight: bold; margin-top: 20px; line-height: 1.6; }
+        .metric { background: #2a2a2a; padding: 10px 15px; margin-bottom: 10px; border-radius: 6px; }
+    </style>
 </head>
 <body>
     <video id="webcam" autoplay playsinline></video>
-    <div id="results" style="font-size: 24px; font-weight: bold; margin-top: 20px;"></div>
+    <div id="results">Loading Engine...</div>
 
     <script type="module">
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
@@ -54,21 +59,38 @@
                 if (results.faceLandmarks.length > 0) {
                     const landmarks = results.faceLandmarks[0];
 
-                    // Extract our 4 specific points
+                    // --- CHIN-TO-PHILTRUM RATIO ---
                     const noseBase = landmarks[2];
                     const upperLip = landmarks[0];
                     const lowerLip = landmarks[17];
                     const chinBase = landmarks[152];
 
-                    // Calculate distances
                     const philtrumLength = calculateDistance(noseBase, upperLip);
                     const chinLength = calculateDistance(lowerLip, chinBase);
-
-                    // Calculate the final ratio
                     const ratio = chinLength / philtrumLength;
 
-                    // Display it
-                    resultsDiv.innerText = `Chin-to-Philtrum Ratio: ${ratio.toFixed(2)} : 1`;
+                    // --- CANTHAL TILT (LEFT EYE) ---
+                    const leftInner = landmarks[133];
+                    const leftOuter = landmarks[33];
+                    const leftDeltaX = Math.abs(leftOuter.x - leftInner.x);
+                    const leftDeltaY = leftInner.y - leftOuter.y; // Inverted Y-axis logic
+                    const leftTilt = Math.atan2(leftDeltaY, leftDeltaX) * (180 / Math.PI);
+
+                    // --- CANTHAL TILT (RIGHT EYE) ---
+                    const rightInner = landmarks[362];
+                    const rightOuter = landmarks[263];
+                    const rightDeltaX = Math.abs(rightOuter.x - rightInner.x);
+                    const rightDeltaY = rightInner.y - rightOuter.y; // Inverted Y-axis logic
+                    const rightTilt = Math.atan2(rightDeltaY, rightDeltaX) * (180 / Math.PI);
+
+                    // --- DISPLAY RESULTS ---
+                    resultsDiv.innerHTML = `
+                        <div class="metric">Chin-to-Philtrum Ratio: <span style="color: #4ade80">${ratio.toFixed(2)} : 1</span></div>
+                        <div class="metric">Left Eye Tilt: <span style="color: #60a5fa">${leftTilt.toFixed(2)}&deg;</span></div>
+                        <div class="metric">Right Eye Tilt: <span style="color: #60a5fa">${rightTilt.toFixed(2)}&deg;</span></div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = "No face detected. Please ensure you are in frame.";
                 }
             }
             // Loop frame by frame
